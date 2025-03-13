@@ -10,7 +10,13 @@ from nltk.stem import PorterStemmer
 
 import spacy
 
-nlp = spacy.load("en_core_web_sm")
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    print("Le modèle 'en_core_web_sm' n'est pas installé. Téléchargement en cours...")
+    from spacy.cli import download
+    download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
 
 def cleaning(text):
     set_stopwords = set(stopwords.words("english"))
