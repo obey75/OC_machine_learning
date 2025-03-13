@@ -3,3 +3,4 @@ bs4
 nltk
 spacy
 scikit-learn
+en-core-web-sm
