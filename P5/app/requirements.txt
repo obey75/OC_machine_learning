@@ -1,5 +1,5 @@
 streamlit
 bs4
 nltk
-spacy
+spacy==3.6.0
 scikit-learn
