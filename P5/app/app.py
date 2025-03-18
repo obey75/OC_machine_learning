@@ -1,95 +1,77 @@
-import streamlit as st
+# Imports
 import pickle
-import re
-
-from bs4 import BeautifulSoup
-
+import numpy as np
+import uvicorn
 import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-
 import spacy
+from fastapi import FastAPI
+from pydantic import BaseModel
+import re
+from bs4 import BeautifulSoup
+import logging
 
+# Elements necessary for preprocessing
+nltk.download('stopwords')
 try:
-    nlp = spacy.load("spacy_models/en_core_web_sm/en_core_web_sm-3.8.0")
-except OSError:
-    print("Le modèle 'en_core_web_sm' n'est pas installé. Téléchargement en cours...")
-    from spacy.cli import download
-    download("en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+    nlp = spacy.load('en_core_web_sm')
+except:
+    spacy.cli.download("en_core_web_sm")
+    nlp = spacy.load('en_core_web_sm')
 
 
+stopwords = nltk.corpus.stopwords.words('english')
 
 def cleaning(text):
-    set_stopwords = set(stopwords.words("english"))
+    set_stopwords = set(stopwords)
 
-    text = BeautifulSoup(text).get_text()
+    text = BeautifulSoup(text, "html.parser").get_text()
     text = re.sub("[^a-zA-Z]", " ", text)
     text = text.lower()
     
     doc = nlp(text)
-    meaningful_words = [w.lemma_ for w in doc if not str(w) in set_stopwords]   
+    meaningful_words = [w.lemma_ for w in doc if str(w) not in set_stopwords]   
 
-    return( " ".join(meaningful_words)) 
+    return " ".join(meaningful_words)
 
+# FastAPI app setup
+app = FastAPI()
 
-def predict(input_text):
-    cleaned_text = cleaning(input_text)
-    
-    X = vectorizer.transform([cleaned_text]).toarray()
-    pred_proba = model.predict_proba(X)[0]
-    
-    res = [(label_encoder.inverse_transform([model.classes_[id]])[0],x) for id,x in enumerate(pred_proba) if x>0.1]
-    
-    return res
+# Load your pre-trained models
+with open("lda_model.pkl", "rb") as f:
+    lda = pickle.load(f)
 
+with open("label_encoder.pkl", "rb") as f:
+    label_encoder = pickle.load(f)
 
-# Charger le modèle Hugging Face pré-entraîné
-@st.cache_resource
-def load_model():
-    with open("lda_model.pkl", "rb") as f:
-        lda = pickle.load(f)
-    
-    with open("label_encoder.pkl", "rb") as f:
-        label_encoder = pickle.load(f)
+with open("vectorizer.pkl", "rb") as f:
+    vectorizer = pickle.load(f)
 
-    with open("vectorizer.pkl", "rb") as f:
-        vectorizer = pickle.load(f)
+print("idf_ Attribute Exists:", hasattr(vectorizer, "idf_"))
 
-    return lda, label_encoder, vectorizer
+# Define Pydantic model for input validation
+class PredictionInput(BaseModel):
+    data: str
 
-model, label_encoder, vectorizer = load_model()
+from fastapi.responses import JSONResponse
 
+@app.post("/prediction", summary="Retourne une liste des tags prédits")
+def get_prediction(input_data: PredictionInput):
+    try:
+        cleaned_text = cleaning(input_data.data)
+        X = vectorizer.transform([cleaned_text]).toarray()
+        pred_proba = lda.predict_proba(X)[0]
 
-# Interface Streamlit
-st.title("Suggestion de tags")
+        # Prepare the response
+        res = [
+            (label_encoder.inverse_transform([lda.classes_[idx]])[0], prob)
+            for idx, prob in enumerate(pred_proba) if prob > 0.1
+        ]
 
-# Description
-st.write("""
-**Cette application permet de suggérer des tags pertinents pour un post StackOverFlow. 
-Le modèle utilisé est basé sur un embedding TF-IDF.
-""")
+        return JSONResponse(content={"predictions": res}, status_code=200)
+    except Exception as e:
+        logging.error(f"Error during prediction: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
-# Entrée utilisateur
-input_text = st.text_area("Entrez votre texte :", height=500)
-
-# Prédiction
-if st.button("Prédire") and input_text.strip():
-    with st.spinner("Analyse en cours..."):
-        try:
-            # Appeler le modèle pour classer le texte
-            cleaned_text = cleaning(input_text)
-            res = predict(input_text)
-
-
-            # Afficher les résultats
-            st.subheader("Résultats de la Prédiction :")
-            for line in res:  # Parcourir les scores
-                label = line[0]
-                score = line[1] * 100
-                st.write(f"**{label}** : {score:.2f} %")
-
-        except Exception as e:
-            st.error(f"Erreur pendant la prédiction : {e}")
-else:
-    st.info("Entrez du texte et appuyez sur 'Prédire'.")
+# Run the app
+if __name__ == '__main__':
+    uvicorn.run(app, host='0.0.0.0', port=4000, debug=True)
